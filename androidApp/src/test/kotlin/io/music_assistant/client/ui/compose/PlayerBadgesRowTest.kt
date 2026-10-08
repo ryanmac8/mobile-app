@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.height
+import androidx.compose.ui.unit.width
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.music_assistant.client.data.model.client.AppMediaItemFixtures
 import io.music_assistant.client.data.model.client.PlayerData
@@ -35,6 +36,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 /**
  * Pins the badge row's state machine. Both badges are permanent fixtures once supported —
@@ -76,7 +78,11 @@ class PlayerBadgesRowTest {
         )
     }
 
-    private fun show(player: PlayerData, sleepTimerSupported: Boolean = true) {
+    private fun show(
+        player: PlayerData,
+        sleepTimerSupported: Boolean = true,
+        compact: Boolean = false,
+    ) {
         composeTestRule.setContent {
             PlayerBadgesRow(
                 player = player,
@@ -84,6 +90,7 @@ class PlayerBadgesRowTest {
                 onSleepTimerClick = {}.takeIf { sleepTimerSupported },
                 onToggleAutoplay = { toggledWith += it },
                 onToggleCrossfade = { crossfadeToggledWith += it },
+                compact = compact,
             )
         }
     }
@@ -196,6 +203,43 @@ class PlayerBadgesRowTest {
         node(Res.string.cd_sleep_timer).assertIsDisplayed().assertHasClickAction()
     }
 
+    // --- compact label peek -----------------------------------------------------
+
+    private fun widthOf(resource: StringResource) =
+        node(resource).getUnclippedBoundsInRoot().width
+
+    @Test
+    fun `compact autoplay badge peeks its label after a tap, then folds back`() {
+        show(playerWith(autoPlayEnabled = false), compact = true)
+        val iconOnly = widthOf(Res.string.cd_autoplay_off)
+
+        node(Res.string.cd_autoplay_off).performClick()
+        composeTestRule.mainClock.advanceTimeBy(PEEK_OPEN_MS)
+        assertTrue(widthOf(Res.string.cd_autoplay_off) > iconOnly, "label should slide open")
+
+        composeTestRule.mainClock.advanceTimeBy(PEEK_GONE_MS)
+        assertEquals(iconOnly, widthOf(Res.string.cd_autoplay_off), "label should fold away")
+    }
+
+    @Test
+    fun `compact crossfade badge peeks its label after a tap`() {
+        show(playerWith(autoPlayEnabled = true, crossfadeEnabled = false), compact = true)
+        val iconOnly = widthOf(Res.string.cd_crossfade_off)
+
+        node(Res.string.cd_crossfade_off).performClick()
+        composeTestRule.mainClock.advanceTimeBy(PEEK_OPEN_MS)
+        assertTrue(widthOf(Res.string.cd_crossfade_off) > iconOnly, "label should slide open")
+    }
+
+    @Test
+    fun `compact badge does not peek on its own`() {
+        show(playerWith(autoPlayEnabled = false, crossfadeEnabled = false), compact = true)
+        val iconOnly = widthOf(Res.string.cd_autoplay_off)
+
+        composeTestRule.mainClock.advanceTimeBy(PEEK_OPEN_MS)
+        assertEquals(iconOnly, widthOf(Res.string.cd_autoplay_off))
+    }
+
     // --- layout -----------------------------------------------------------------
 
     @Test
@@ -230,5 +274,13 @@ class PlayerBadgesRowTest {
             composeTestRule.onNodeWithTag("populated").getUnclippedBoundsInRoot().height
 
         assertEquals(populated, empty, "badge row must not change height with its content")
+    }
+
+    private companion object {
+        /** Past the slide-open animation, well inside the peek window. */
+        const val PEEK_OPEN_MS = 600L
+
+        /** Past the peek window plus the fold-away animation. */
+        const val PEEK_GONE_MS = 2_000L
     }
 }

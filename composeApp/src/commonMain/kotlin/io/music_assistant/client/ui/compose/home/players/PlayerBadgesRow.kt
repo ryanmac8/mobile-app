@@ -3,6 +3,12 @@
 
 package io.music_assistant.client.ui.compose.home.players
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +24,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,6 +44,7 @@ import io.music_assistant.client.ui.alphaOn
 import io.music_assistant.client.ui.compose.common.icons.AnimatedAutoplayIcon
 import io.music_assistant.client.ui.compose.common.icons.AnimatedCrossfadeIcon
 import io.music_assistant.client.ui.contentColorByLuminance
+import kotlinx.coroutines.delay
 import musicassistantclient.composeapp.generated.resources.Res
 import musicassistantclient.composeapp.generated.resources.cd_autoplay_off
 import musicassistantclient.composeapp.generated.resources.cd_autoplay_on
@@ -39,6 +53,7 @@ import musicassistantclient.composeapp.generated.resources.cd_crossfade_on
 import musicassistantclient.composeapp.generated.resources.player_autoplay
 import musicassistantclient.composeapp.generated.resources.player_crossfade
 import org.jetbrains.compose.resources.stringResource
+import kotlin.time.Duration.Companion.milliseconds
 
 /** Fixed so badges appearing and disappearing never reflow the player below. */
 private val BADGE_ROW_HEIGHT = 28.dp
@@ -63,7 +78,8 @@ private const val BADGE_PILL_ALPHA = 0.2f
  * with nothing to show, so a badge switching on does not shift the artwork below it.
  *
  * [compact] drops the text labels so each badge is just its icon. A running sleep timer
- * keeps its countdown, since that is a value rather than a label.
+ * keeps its countdown, since that is a value rather than a label. Tapping a compact autoplay
+ * or crossfade badge briefly slides its label back open to name what was toggled.
  */
 @Composable
 fun PlayerBadgesRow(
@@ -145,48 +161,109 @@ private fun CrossfadeBadge(
     compact: Boolean,
     onClick: (() -> Unit)?,
 ) {
+    val peek = rememberLabelPeek()
     BadgePill(
         contentDescription = stringResource(
             if (on) Res.string.cd_crossfade_on else Res.string.cd_crossfade_off,
         ),
         tint = tint,
         on = on,
-        iconOnly = compact,
-        onClick = onClick,
+        iconOnly = compact && !peek.visible,
+        onClick = onClick?.let { click ->
+            {
+                click()
+                peek.show()
+            }
+        },
     ) {
         // Colors come from the pill via LocalContentColor.
         AnimatedCrossfadeIcon(smart = smart, modifier = Modifier.size(BADGE_ICON_SIZE))
-        if (!compact) {
-            Text(
-                text = stringResource(Res.string.player_crossfade),
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
+        BadgeLabel(
+            text = stringResource(Res.string.player_crossfade),
+            visible = !compact || peek.visible,
+        )
     }
 }
 
 @Composable
 private fun AutoplayBadge(tint: Color, on: Boolean, compact: Boolean, onClick: (() -> Unit)?) {
+    val peek = rememberLabelPeek()
     BadgePill(
         contentDescription = stringResource(
             if (on) Res.string.cd_autoplay_on else Res.string.cd_autoplay_off,
         ),
         tint = tint,
         on = on,
-        iconOnly = compact,
-        onClick = onClick,
+        iconOnly = compact && !peek.visible,
+        onClick = onClick?.let { click ->
+            {
+                click()
+                peek.show()
+            }
+        },
     ) {
         // Colors come from the pill via LocalContentColor, so the badge cannot drift
         // out of sync with its own container.
         AnimatedAutoplayIcon(active = on, modifier = Modifier.size(BADGE_ICON_SIZE))
-        if (!compact) {
-            Text(
-                text = stringResource(Res.string.player_autoplay),
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
+        BadgeLabel(
+            text = stringResource(Res.string.player_autoplay),
+            visible = !compact || peek.visible,
+        )
     }
 }
+
+/**
+ * A badge's text label, sliding open and shut as [visible] changes. Already-visible labels
+ * appear without animating, so only a change (a compact peek, or flipping the compact
+ * setting) moves the pill.
+ */
+@Composable
+private fun RowScope.BadgeLabel(text: String, visible: Boolean) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + expandHorizontally(),
+        exit = fadeOut() + shrinkHorizontally(),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * Briefly reveals a compact badge's label after the user taps it, so an icon-only pill still
+ * says which setting just changed — plain crossfade, for one, does not animate, leaving only
+ * the fill to show the toggle. Only taps peek: a change pushed by the server stays quiet.
+ * Each tap restarts the window, and the hide dies with the composition.
+ */
+@Composable
+private fun rememberLabelPeek(): LabelPeek {
+    val peek = remember { LabelPeek() }
+    LaunchedEffect(peek.taps) {
+        if (peek.taps > 0) {
+            delay(LABEL_PEEK_DURATION)
+            peek.visible = false
+        }
+    }
+    return peek
+}
+
+@Stable
+private class LabelPeek {
+    var taps by mutableIntStateOf(0)
+        private set
+    var visible by mutableStateOf(false)
+
+    fun show() {
+        visible = true
+        taps++
+    }
+}
+
+/** Long enough to read a one-word label, short enough not to linger as layout noise. */
+private val LABEL_PEEK_DURATION = 1500.milliseconds
 
 /**
  * Shared container for every player badge: a rounded pill whose colors invert when [on].
@@ -225,6 +302,11 @@ internal fun BadgePill(
         MaterialTheme.colorScheme.scrim.copy(alpha = BADGE_PILL_ALPHA)
     }
     val contentColor = if (on) tint.contentColorByLuminance() else tint
+    // Animated so a label sliding in or out does not snap the pill's edges.
+    val horizontalPadding by animateDpAsState(
+        targetValue = if (iconOnly) 4.dp else 8.dp,
+        label = "badgePadding",
+    )
 
     Row(
         modifier = modifier
@@ -233,7 +315,7 @@ internal fun BadgePill(
             .clip(BADGE_PILL_SHAPE)
             .background(container)
             .then(onClick?.let { Modifier.clickable(onClick = it) } ?: Modifier)
-            .padding(horizontal = if (iconOnly) 4.dp else 8.dp, vertical = 4.dp)
+            .padding(horizontal = horizontalPadding, vertical = 4.dp)
             .clearAndSetSemantics { this.contentDescription = contentDescription },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
